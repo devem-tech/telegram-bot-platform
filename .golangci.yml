@@ -1,0 +1,52 @@
+version: "2"
+
+linters:
+  default: all
+  disable:
+    - noinlineerr
+  settings:
+    depguard:
+      rules:
+        main:
+          allow:
+            - $gostd
+            - github.com/google/uuid
+            - github.com/robfig/cron/v3
+            - github.com/devem-tech/telegram-bot-platform
+            - github.com/go-telegram-bot-api/telegram-bot-api/v5
+    revive:
+      rules:
+        - name: package-comments
+          disabled: true
+    varnamelen:
+      min-name-length: 2
+      ignore-names:
+        - x
+  exclusions:
+    rules:
+      - path: opt/
+        linters:
+          - ireturn
+      - path: mappers/
+        linters:
+          - ireturn
+      - path: telegram/mapping.go
+        linters:
+          - gochecknoglobals
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+    - golines
+    - swaggo
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/devem-tech/telegram-bot-platform)
+    golines:
+      max-len: 120
