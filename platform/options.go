@@ -33,6 +33,12 @@ func WithFallback(fallback Fallback) Option {
 	}
 }
 
+func WithMiddlewares(mw ...Middleware) Option {
+	return func(p *Platform) {
+		p.middlewares = append(p.middlewares, mw...)
+	}
+}
+
 // WithNWorkers sets the number of worker goroutines.
 func WithNWorkers(nWorkers int) Option {
 	return func(p *Platform) {

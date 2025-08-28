@@ -47,6 +47,10 @@ type Fallback interface {
 	Handle(ctx context.Context, update telegram.Update, err error)
 }
 
+type HandlerFunc func(ctx context.Context, update telegram.Update) error
+
+type Middleware func(ctx context.Context, update telegram.Update, next HandlerFunc) error
+
 // Task represents the task to process a Usecase.
 type Task struct {
 	usecase  Usecase
@@ -57,13 +61,14 @@ type Task struct {
 // Platform encapsulates the message handling system,
 // including workers, usecases, cron jobs, and a fallback strategy.
 type Platform struct {
-	client   Client
-	usecases []Usecase
-	jobs     []Job
-	fallback Fallback
-	nWorkers int
-	maxTasks int
-	location *time.Location
+	client      Client
+	usecases    []Usecase
+	jobs        []Job
+	fallback    Fallback
+	middlewares []Middleware
+	nWorkers    int
+	maxTasks    int
+	location    *time.Location
 }
 
 // New constructs a new Platform instance, applying any optional configuration.
@@ -74,13 +79,14 @@ func New(options ...Option) *Platform {
 	}
 
 	platform := &Platform{
-		client:   nil,
-		usecases: nil,
-		jobs:     nil,
-		fallback: nil,
-		nWorkers: defaultNWorkers,
-		maxTasks: defaultMaxTasks,
-		location: location,
+		client:      nil,
+		usecases:    nil,
+		jobs:        nil,
+		fallback:    nil,
+		middlewares: nil,
+		nWorkers:    defaultNWorkers,
+		maxTasks:    defaultMaxTasks,
+		location:    location,
 	}
 
 	for _, opt := range options {
@@ -147,20 +153,31 @@ func (p *Platform) worker(ctx context.Context, tasks <-chan Task, wg *sync.WaitG
 		// Generate a unique request ID and store it in the context.
 		ctx := context.WithValue(ctx, RequestID{}, uuid.New().String())
 
-		// Check if the usecase matches the update.
-		matches, err := task.usecase.Matches(ctx, task.update)
-		if err != nil {
-			if task.fallback != nil {
-				task.fallback.Handle(ctx, task.update, err)
+		core := func(ctx context.Context, _ telegram.Update) error {
+			// Check if the usecase matches the update.
+			matches, err := task.usecase.Matches(ctx, task.update)
+			if err != nil {
+				if task.fallback != nil {
+					task.fallback.Handle(ctx, task.update, err)
+				}
+
+				return nil
+			} else if !matches {
+				return nil
 			}
 
-			continue
-		} else if !matches {
-			continue
+			// Handle the update using the matched usecase.
+			if err = task.usecase.Handle(ctx, task.update); err != nil {
+				if task.fallback != nil {
+					task.fallback.Handle(ctx, task.update, err)
+				}
+			}
+
+			return nil
 		}
 
-		// Handle the update using the matched usecase.
-		if err = task.usecase.Handle(ctx, task.update); err != nil {
+		h := chain(p.middlewares, core)
+		if err := h(ctx, task.update); err != nil {
 			if task.fallback != nil {
 				task.fallback.Handle(ctx, task.update, err)
 			}
@@ -183,6 +200,19 @@ func (p *Platform) cron(ctx context.Context) *cron.Cron {
 	}
 
 	x.Start()
+
+	return x
+}
+
+func chain(mw []Middleware, endpoint HandlerFunc) HandlerFunc {
+	x := endpoint
+	for i := len(mw) - 1; i >= 0; i-- {
+		next := x
+		m := mw[i]
+		x = func(ctx context.Context, update telegram.Update) error {
+			return m(ctx, update, next)
+		}
+	}
 
 	return x
 }
