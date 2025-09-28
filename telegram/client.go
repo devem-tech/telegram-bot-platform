@@ -14,6 +14,7 @@ type ParseMode string
 
 const (
 	ParseModeMarkdownV2 ParseMode = tgbotapi.ModeMarkdownV2
+	ParseModeModeHTML   ParseMode = tgbotapi.ModeHTML
 )
 
 type ChatAction string
@@ -98,8 +99,12 @@ func (c *Client) SendChatAction(_ context.Context, in SendChatActionIn) error {
 }
 
 type SendVideoIn struct {
-	ChatID ChatID
-	Video  InputFile
+	ChatID              ChatID
+	Video               InputFile
+	DisableNotification bool
+	Caption             string
+	ParseMode           ParseMode
+	SupportsStreaming   bool
 }
 
 func (c *Client) SendVideo(_ context.Context, in SendVideoIn) error {
@@ -107,6 +112,11 @@ func (c *Client) SendVideo(_ context.Context, in SendVideoIn) error {
 		Name:   in.Video.Name,
 		Reader: in.Video.Data,
 	})
+
+	video.DisableNotification = in.DisableNotification
+	video.Caption = in.Caption
+	video.ParseMode = string(in.ParseMode)
+	video.SupportsStreaming = in.SupportsStreaming
 
 	if _, err := c.client.Send(video); err != nil {
 		return fmt.Errorf("telegram: %w", err)

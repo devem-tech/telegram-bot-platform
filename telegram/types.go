@@ -5,7 +5,9 @@ type ChatID int64
 type ChatType string
 
 const (
-	ChatTypePrivate ChatType = "private"
+	ChatTypePrivate    ChatType = "private"
+	ChatTypeGroup      ChatType = "group"
+	ChatTypeSuperGroup ChatType = "supergroup"
 )
 
 type MessageID int
