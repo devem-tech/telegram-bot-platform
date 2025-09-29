@@ -60,6 +60,16 @@ func (c *Client) Me(_ context.Context) Username {
 	return Username(c.client.Self.UserName)
 }
 
+type Chattable = tgbotapi.Chattable
+
+func (c *Client) Send(_ context.Context, in Chattable) error {
+	if _, err := c.client.Send(in); err != nil {
+		return fmt.Errorf("telegram: %w", err)
+	}
+
+	return nil
+}
+
 type SendMessageIn struct {
 	ChatID           ChatID
 	Text             Text
