@@ -36,15 +36,21 @@ type Usecase interface {
 	Handle(ctx context.Context, update telegram.Update) error
 }
 
-// Job represents a cron job to be executed periodically.
-type Job interface {
-	Cron() string
-	Handle(ctx context.Context)
-}
-
 // Fallback defines a handler for processing errors that occur during handling.
 type Fallback interface {
 	Handle(ctx context.Context, update telegram.Update, err error)
+}
+
+// Job represents a cron job to be executed periodically.
+type Job interface {
+	Cron() string
+	Handle(ctx context.Context) error
+}
+
+// JobFallback is a handler for processing errors that occur during job execution.
+// It works similarly to Fallback, but for scheduled jobs.
+type JobFallback interface {
+	Handle(ctx context.Context, err error)
 }
 
 type HandlerFunc func(ctx context.Context, update telegram.Update) error
@@ -63,8 +69,9 @@ type Task struct {
 type Platform struct {
 	client      Client
 	usecases    []Usecase
-	jobs        []Job
 	fallback    Fallback
+	jobs        []Job
+	jobFallback JobFallback
 	middlewares []Middleware
 	nWorkers    int
 	maxTasks    int
@@ -81,8 +88,9 @@ func New(options ...Option) *Platform {
 	platform := &Platform{
 		client:      nil,
 		usecases:    nil,
-		jobs:        nil,
 		fallback:    nil,
+		jobs:        nil,
+		jobFallback: nil,
 		middlewares: nil,
 		nWorkers:    defaultNWorkers,
 		maxTasks:    defaultMaxTasks,
@@ -193,7 +201,11 @@ func (p *Platform) cron(ctx context.Context) *cron.Cron {
 
 	for _, job := range p.jobs {
 		if _, err := x.AddFunc(job.Cron(), func() {
-			job.Handle(ctx)
+			if err := job.Handle(ctx); err != nil {
+				if p.jobFallback != nil {
+					p.jobFallback.Handle(ctx, err)
+				}
+			}
 		}); err != nil {
 			panic(err)
 		}

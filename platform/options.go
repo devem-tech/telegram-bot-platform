@@ -19,6 +19,13 @@ func WithUsecases(usecases ...Usecase) Option {
 	}
 }
 
+// WithFallback sets the fallback handler for error processing.
+func WithFallback(fallback Fallback) Option {
+	return func(p *Platform) {
+		p.fallback = fallback
+	}
+}
+
 // WithJobs sets the cron jobs to be scheduled.
 func WithJobs(jobs ...Job) Option {
 	return func(p *Platform) {
@@ -26,10 +33,10 @@ func WithJobs(jobs ...Job) Option {
 	}
 }
 
-// WithFallback sets the fallback handler for error processing.
-func WithFallback(fallback Fallback) Option {
+// WithJobFallback sets the fallback handler for errors occurring during job execution.
+func WithJobFallback(jobFallback JobFallback) Option {
 	return func(p *Platform) {
-		p.fallback = fallback
+		p.jobFallback = jobFallback
 	}
 }
 
