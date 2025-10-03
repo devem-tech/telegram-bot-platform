@@ -6,21 +6,20 @@ import (
 	"time"
 
 	"github.com/devem-tech/telegram-bot-platform/platform"
-	"github.com/devem-tech/telegram-bot-platform/telegram"
 )
 
 const chatActionTTL = 5 * time.Second
 
-type Usecase struct {
-	platform.Usecase
+type Usecase[U platform.Update] struct {
+	platform.Usecase[U]
 
-	Telegram  *telegram.Client
-	Action    telegram.ChatAction
+	SendChatActionFunc func(ctx context.Context, update U)
+
 	Namespace string
 	Timeout   time.Duration
 }
 
-func (u *Usecase) Handle(ctx context.Context, update telegram.Update) error {
+func (u *Usecase[U]) Handle(ctx context.Context, update U) error {
 	done := make(chan struct{})
 	defer close(done)
 
@@ -32,10 +31,7 @@ func (u *Usecase) Handle(ctx context.Context, update telegram.Update) error {
 			case <-ctx.Done():
 				return
 			default:
-				_ = u.Telegram.SendChatAction(ctx, telegram.SendChatActionIn{
-					ChatID: update.Message.Chat.ID,
-					Action: u.Action,
-				})
+				u.SendChatActionFunc(ctx, update)
 
 				time.Sleep(chatActionTTL)
 			}

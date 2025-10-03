@@ -7,8 +7,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
-
-	"github.com/devem-tech/telegram-bot-platform/telegram"
 )
 
 const (
@@ -24,21 +22,23 @@ const (
 
 type RequestID struct{}
 
+type Update = any
+
 // Client defines the interface that returns incoming telegram updates.
-type Client interface {
-	Updates() telegram.UpdateCh
+type Client[U Update] interface {
+	Updates(ctx context.Context) <-chan U
 }
 
 // Usecase represents a handler for specific types of updates.
 // It determines whether it should handle a given update, and processes it.
-type Usecase interface {
-	Matches(ctx context.Context, update telegram.Update) (bool, error)
-	Handle(ctx context.Context, update telegram.Update) error
+type Usecase[U Update] interface {
+	Matches(ctx context.Context, update U) (bool, error)
+	Handle(ctx context.Context, update U) error
 }
 
 // Fallback defines a handler for processing errors that occur during handling.
-type Fallback interface {
-	Handle(ctx context.Context, update telegram.Update, err error)
+type Fallback[U Update] interface {
+	Handle(ctx context.Context, update U, err error)
 }
 
 // Job represents a cron job to be executed periodically.
@@ -53,39 +53,39 @@ type JobFallback interface {
 	Handle(ctx context.Context, err error)
 }
 
-type HandlerFunc func(ctx context.Context, update telegram.Update) error
+type HandlerFunc[U Update] func(ctx context.Context, update U) error
 
-type Middleware func(ctx context.Context, update telegram.Update, next HandlerFunc) error
+type Middleware[U Update] func(ctx context.Context, update U, next HandlerFunc[U]) error
 
-// Task represents the task to process a Usecase.
-type Task struct {
-	usecase  Usecase
-	fallback Fallback
-	update   telegram.Update
+// Task represents the task to process an Usecase.
+type Task[U Update] struct {
+	usecase  Usecase[U]
+	fallback Fallback[U]
+	update   U
 }
 
 // Platform encapsulates the message handling system,
 // including workers, usecases, cron jobs, and a fallback strategy.
-type Platform struct {
-	client      Client
-	usecases    []Usecase
-	fallback    Fallback
+type Platform[U Update] struct {
+	client      Client[U]
+	usecases    []Usecase[U]
+	fallback    Fallback[U]
 	jobs        []Job
 	jobFallback JobFallback
-	middlewares []Middleware
+	middlewares []Middleware[U]
 	nWorkers    int
 	maxTasks    int
 	location    *time.Location
 }
 
 // New constructs a new Platform instance, applying any optional configuration.
-func New(options ...Option) *Platform {
+func New[U Update](options ...Option[U]) *Platform[U] {
 	location, err := time.LoadLocation(defaultLocation)
 	if err != nil {
 		panic(err)
 	}
 
-	platform := &Platform{
+	platform := &Platform[U]{
 		client:      nil,
 		usecases:    nil,
 		fallback:    nil,
@@ -109,7 +109,7 @@ func New(options ...Option) *Platform {
 }
 
 // Run starts processing incoming updates and scheduled jobs.
-func (p *Platform) Run(ctx context.Context) {
+func (p *Platform[U]) Run(ctx context.Context) {
 	// Start cron jobs.
 	defer p.cron(ctx).Stop()
 
@@ -117,7 +117,7 @@ func (p *Platform) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 
 	// Create a buffered task channel.
-	tasks := make(chan Task, p.maxTasks)
+	tasks := make(chan Task[U], p.maxTasks)
 
 	// Launch workers to process tasks concurrently.
 	for range p.nWorkers {
@@ -127,21 +127,13 @@ func (p *Platform) Run(ctx context.Context) {
 	}
 
 	// Receive and handle updates from the client.
-	for update := range p.client.Updates() {
-		if update.Message == nil {
-			// Skip non-message updates.
-			continue
-		}
-
-		// Convert the update to an internal representation.
-		in := telegram.In(update)
-
+	for update := range p.client.Updates(ctx) {
 		// Dispatch the update to each usecase.
 		for _, usecase := range p.usecases {
-			tasks <- Task{
+			tasks <- Task[U]{
 				usecase:  usecase,
 				fallback: p.fallback,
-				update:   in,
+				update:   update,
 			}
 		}
 	}
@@ -154,14 +146,14 @@ func (p *Platform) Run(ctx context.Context) {
 }
 
 // worker processes incoming tasks from the task channel.
-func (p *Platform) worker(ctx context.Context, tasks <-chan Task, wg *sync.WaitGroup) {
+func (p *Platform[U]) worker(ctx context.Context, tasks <-chan Task[U], wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for task := range tasks {
 		// Generate a unique request ID and store it in the context.
 		ctx := context.WithValue(ctx, RequestID{}, uuid.New().String())
 
-		core := func(ctx context.Context, _ telegram.Update) error {
+		core := func(ctx context.Context, _ U) error {
 			// Check if the usecase matches the update.
 			matches, err := task.usecase.Matches(ctx, task.update)
 			if err != nil {
@@ -194,7 +186,7 @@ func (p *Platform) worker(ctx context.Context, tasks <-chan Task, wg *sync.WaitG
 }
 
 // cron initializes and starts all registered cron jobs.
-func (p *Platform) cron(ctx context.Context) *cron.Cron {
+func (p *Platform[U]) cron(ctx context.Context) *cron.Cron {
 	x := cron.New(
 		cron.WithLocation(p.location),
 	)
@@ -216,12 +208,12 @@ func (p *Platform) cron(ctx context.Context) *cron.Cron {
 	return x
 }
 
-func chain(mw []Middleware, endpoint HandlerFunc) HandlerFunc {
+func chain[U Update](mw []Middleware[U], endpoint HandlerFunc[U]) HandlerFunc[U] {
 	x := endpoint
 	for i := len(mw) - 1; i >= 0; i-- {
 		next := x
 		m := mw[i]
-		x = func(ctx context.Context, update telegram.Update) error {
+		x = func(ctx context.Context, update U) error {
 			return m(ctx, update, next)
 		}
 	}
