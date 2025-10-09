@@ -59,6 +59,7 @@ type Middleware[U Update] func(ctx context.Context, update U, next HandlerFunc[U
 
 // Task represents the task to process an Usecase.
 type Task[U Update] struct {
+	ctx      context.Context //nolint:containedctx
 	usecase  Usecase[U]
 	fallback Fallback[U]
 	update   U
@@ -123,18 +124,32 @@ func (p *Platform[U]) Run(ctx context.Context) {
 	for range p.nWorkers {
 		wg.Add(1)
 
-		go p.worker(ctx, tasks, &wg)
+		go p.worker(tasks, &wg)
 	}
 
-	// Receive and handle updates from the client.
-	for update := range p.client.Updates(ctx) {
-		// Dispatch the update to each usecase.
+	// Dispatch the update to each usecase.
+	dispatch := func(ctx context.Context, update U) error {
 		for _, usecase := range p.usecases {
 			tasks <- Task[U]{
+				ctx:      ctx,
 				usecase:  usecase,
 				fallback: p.fallback,
 				update:   update,
 			}
+		}
+
+		return nil
+	}
+
+	x := chain(p.middlewares, dispatch)
+
+	// Receive and handle updates from the client.
+	for update := range p.client.Updates(ctx) {
+		// Generate a unique request ID and store it in the context.
+		ctx := context.WithValue(ctx, RequestID{}, uuid.New().String())
+
+		if err := x(ctx, update); err != nil && p.fallback != nil {
+			p.fallback.Handle(ctx, update, err)
 		}
 	}
 
@@ -146,38 +161,26 @@ func (p *Platform[U]) Run(ctx context.Context) {
 }
 
 // worker processes incoming tasks from the task channel.
-func (p *Platform[U]) worker(ctx context.Context, tasks <-chan Task[U], wg *sync.WaitGroup) {
+func (p *Platform[U]) worker(tasks <-chan Task[U], wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for task := range tasks {
-		// Generate a unique request ID and store it in the context.
-		ctx := context.WithValue(ctx, RequestID{}, uuid.New().String())
+		ctx := task.ctx
 
-		core := func(ctx context.Context, _ U) error {
-			// Check if the usecase matches the update.
-			matches, err := task.usecase.Matches(ctx, task.update)
-			if err != nil {
-				if task.fallback != nil {
-					task.fallback.Handle(ctx, task.update, err)
-				}
-
-				return nil
-			} else if !matches {
-				return nil
+		// Check if the usecase matches the update.
+		matches, err := task.usecase.Matches(ctx, task.update)
+		if err != nil {
+			if task.fallback != nil {
+				task.fallback.Handle(ctx, task.update, err)
 			}
 
-			// Handle the update using the matched usecase.
-			if err = task.usecase.Handle(ctx, task.update); err != nil {
-				if task.fallback != nil {
-					task.fallback.Handle(ctx, task.update, err)
-				}
-			}
-
-			return nil
+			continue
+		} else if !matches {
+			continue
 		}
 
-		h := chain(p.middlewares, core)
-		if err := h(ctx, task.update); err != nil {
+		// Handle the update using the matched usecase.
+		if err = task.usecase.Handle(ctx, task.update); err != nil {
 			if task.fallback != nil {
 				task.fallback.Handle(ctx, task.update, err)
 			}
