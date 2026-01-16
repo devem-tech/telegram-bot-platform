@@ -10,10 +10,10 @@ import (
 )
 
 const (
-	// defaultNWorkers defines the number of workers to process tasks.
+	// defaultNWorkers is the number of worker goroutines.
 	defaultNWorkers = 10
 
-	// defaultMaxTasks defines the channel capacity for processing tasks.
+	// defaultMaxTasks is the task channel buffer size.
 	defaultMaxTasks = 100
 
 	// defaultLocation is the default timezone used by the cron scheduler.
@@ -21,98 +21,99 @@ const (
 )
 
 type (
-	// RequestID is the context key for unique request identifiers.
-	// Value type: string.
+	// RequestID is a context key for a unique request identifier. The associated
+	// value is a string.
 	RequestID struct{}
 )
 
-// Update is a type alias for any incoming event (e.g., Telegram update).
-// It allows the platform to be generic over different update types.
+// Update is an alias for an incoming event (e.g., a Telegram update). It allows
+// the platform to be generic over different update types.
 type Update = any
 
-// Client defines the interface that returns a channel of incoming updates.
-// The channel must be closed when the client is shutting down or the context is cancelled.
-// Implementations should respect the provided context for cancellation.
+// Client provides a channel of incoming updates. The channel must be closed
+// when the client is shutting down or the context is cancelled. Implementations
+// should respect the provided context for cancellation.
 type Client[U Update] interface {
 	Updates(ctx context.Context) <-chan U
 }
 
-// Usecase represents a handler for specific types of updates.
-// It first checks if it should handle a given update via Matches,
-// and if so, processes it via Handle.
+// Usecase handles specific types of updates. It first checks if it should
+// handle a given update via Matches, and if so, processes it via Handle.
 type Usecase[U Update] interface {
-	// Matches determines whether this usecase should handle the given update.
-	// It may return an error if the matching logic fails (e.g., due to I/O).
+	// Matches determines whether this usecase should handle the given update. It
+	// may return an error if the matching logic fails (e.g., due to I/O).
 	// Returning (false, nil) means the update is ignored by this usecase.
 	Matches(ctx context.Context, update U) (bool, error)
 
-	// Handle processes the update.
-	// It is only called if Matches returned (true, nil).
-	// Errors returned here will be passed to the UsecaseFallback, if configured.
+	// Handle processes the update. It is only called if Matches returned (true,
+	// nil). Errors returned here will be passed to the UsecaseFallback, if
+	// configured.
 	Handle(ctx context.Context, update U) error
 }
 
-// UsecaseFallback defines a handler for errors that occur during update processing.
-// It is invoked when an Usecase's Matches or Handle method returns an error,
-// or when a UsecaseMiddleware returns an error.
+// UsecaseFallback handles errors that occur during update processing. It is
+// invoked when a Usecase's Matches or Handle method returns an error, or when a
+// UsecaseMiddleware returns an error.
 type UsecaseFallback[U Update] interface {
-	// Handle receives the original update and the error that occurred.
-	// The context may contain request-scoped values such as RequestID.
+	// Handle receives the original update and the error that occurred. The context
+	// may contain request-scoped values such as RequestID.
 	Handle(ctx context.Context, update U, err error)
 }
 
-// HandlerFunc is a function type that processes an update.
-// It is used as the terminal handler in the middleware chain for updates.
+// HandlerFunc processes an update. It is the terminal handler in the middleware
+// chain for updates.
 type HandlerFunc[U Update] func(ctx context.Context, update U) error
 
-// UsecaseMiddleware is a middleware function that wraps update handling logic.
-// It receives the current context, the update, and the next handler in the chain.
-// Middleware can perform cross-cutting concerns such as logging, tracing, metrics, or validation.
+// UsecaseMiddleware wraps update handling logic. It receives the current
+// context, the update, and the next handler in the chain. Middleware can
+// implement cross-cutting concerns such as logging, tracing, metrics, or
+// validation.
 type UsecaseMiddleware[U Update] func(ctx context.Context, update U, next HandlerFunc[U]) error
 
-// Job represents a cron job to be executed periodically.
-// Each job must provide a human-readable name, a cron schedule, and an execution handler.
+// Job represents a cron job to be executed periodically. Each job provides a
+// cron schedule and an execution handler.
 type Job interface {
-	// Cron returns the cron expression defining the job's schedule (e.g., "@daily", "0 2 * * *").
-	// The expression is interpreted in the timezone configured via WithLocation.
+	// Cron returns the cron expression defining the job's schedule (e.g.,
+	// "@daily", "0 2 * * *"). The expression is interpreted in the timezone
+	// configured via WithLocation.
 	Cron() string
 
-	// Handle contains the job's business logic.
-	// Errors returned here will be passed to the JobFallback, if configured.
+	// Handle contains the job's business logic. Errors returned here will be
+	// passed to the JobFallback, if configured.
 	Handle(ctx context.Context) error
 }
 
-// JobFallback is a handler for errors that occur during job execution.
-// It works similarly to UsecaseFallback, but for scheduled cron jobs.
+// JobFallback handles errors that occur during job execution. It works
+// similarly to UsecaseFallback, but for scheduled cron jobs.
 type JobFallback interface {
-	// Handle receives the error that occurred during job execution.
-	// The context may contain request-scoped values such as RequestID and JobNameKey.
+	// Handle receives the error that occurred during job execution. The context
+	// may contain request-scoped values such as RequestID and JobNameKey.
 	Handle(ctx context.Context, err error)
 }
 
-// JobHandlerFunc is a function type that executes a cron job's logic.
-// It is used as the terminal handler in the job middleware chain.
+// JobHandlerFunc executes a cron job's logic. It is the terminal handler in the
+// job middleware chain.
 type JobHandlerFunc func(ctx context.Context) error
 
-// JobMiddleware is a middleware function that wraps cron job execution.
-// It receives the current context and the next handler in the chain.
-// The job name is available in the context via JobNameKey{}.
-// Useful for tracing, logging, panic recovery, or metrics.
+// JobMiddleware wraps cron job execution. It receives the current context and
+// the next handler in the chain. The job name is available in the context via
+// JobNameKey{}. Useful for tracing, logging, panic recovery, or metrics.
 type JobMiddleware func(ctx context.Context, next JobHandlerFunc) error
 
-// Task represents a unit of work to be processed by a worker goroutine.
-// It bundles an usecase, its fallback, the update, and the associated context.
-// The context is used to propagate request-scoped values (e.g., RequestID) and cancellation signals.
+// Task represents a unit of work processed by a worker goroutine. It bundles a
+// usecase, its fallback, the update, and an associated context. The context is
+// used to propagate request-scoped values (e.g., RequestID) and cancellation
+// signals.
 type Task[U Update] struct {
-	ctx      context.Context //nolint:containedctx // Propagates request-scoped values and cancellation.
+	ctx      context.Context //nolint:containedctx // Request-scoped context.
 	usecase  Usecase[U]
 	fallback UsecaseFallback[U]
 	update   U
 }
 
-// Platform encapsulates the message handling system,
-// including workers, usecases, cron jobs, and fallback strategies.
-// It is configured via functional options and started with the Run method.
+// Platform encapsulates the update processing system, including workers,
+// usecases, cron jobs, and fallback strategies. It is configured via functional
+// options and started with the Run method.
 type Platform[U Update] struct {
 	client             Client[U]
 	usecases           []Usecase[U]
@@ -126,8 +127,8 @@ type Platform[U Update] struct {
 	location           *time.Location
 }
 
-// New constructs a new Platform instance, applying any optional configuration.
-// At minimum, a Client must be provided via WithClient; otherwise, New panics.
+// New creates a new Platform, applying the provided options. At minimum, a
+// Client must be provided via WithClient; otherwise, New panics.
 func New[U Update](options ...Option[U]) *Platform[U] {
 	location, err := time.LoadLocation(defaultLocation)
 	if err != nil {
@@ -158,12 +159,12 @@ func New[U Update](options ...Option[U]) *Platform[U] {
 	return platform
 }
 
-// Run starts processing incoming updates and scheduled jobs.
-// It blocks until the context is cancelled or the client's update channel is closed.
-// On exit, it ensures all workers complete and the cron scheduler is stopped.
+// Run starts processing incoming updates and scheduled jobs. It blocks until
+// the context is canceled or the client's update channel is closed. On exit, it
+// ensures all workers and cron jobs complete their current tasks.
 func (p *Platform[U]) Run(ctx context.Context) {
-	// Start cron jobs.
-	defer p.cron(ctx).Stop()
+	// Start the cron scheduler.
+	scheduler := p.cron(ctx)
 
 	// Use sync.WaitGroup to wait for all workers to complete.
 	var wg sync.WaitGroup
@@ -178,7 +179,7 @@ func (p *Platform[U]) Run(ctx context.Context) {
 		go p.worker(tasks, &wg)
 	}
 
-	// Dispatch the update to each usecase.
+	// Dispatch the update to each configured usecase.
 	dispatch := func(ctx context.Context, update U) error {
 		for _, usecase := range p.usecases {
 			tasks <- Task[U]{
@@ -192,28 +193,52 @@ func (p *Platform[U]) Run(ctx context.Context) {
 		return nil
 	}
 
-	x := chainUsecases(p.usecaseMiddlewares, dispatch)
+	// Wrap the dispatch logic with the middleware chain.
+	fn := chainUsecases(p.usecaseMiddlewares, dispatch)
 
 	// Receive and handle updates from the client.
-	for update := range p.client.Updates(ctx) {
-		// Generate a unique request ID and store it in the context.
-		ctx := context.WithValue(ctx, RequestID{}, uuid.New().String())
+	updates := p.client.Updates(ctx)
 
-		if err := x(ctx, update); err != nil && p.usecaseFallback != nil {
-			p.usecaseFallback.Handle(ctx, update, err)
+loop:
+	for {
+		select {
+		case <-ctx.Done():
+			break loop
+		case update, ok := <-updates:
+			if !ok {
+				break loop
+			}
+
+			// Create a context that ignores parent cancellation to ensure task
+			// completion during shutdown.
+			ctx := context.WithoutCancel(ctx)
+
+			// Generate a unique request ID and store it in the context.
+			ctx = context.WithValue(ctx, RequestID{}, uuid.New().String())
+
+			// Execute the handler chain and route any errors to the fallback handler.
+			if err := fn(ctx, update); err != nil && p.usecaseFallback != nil {
+				p.usecaseFallback.Handle(ctx, update, err)
+			}
 		}
 	}
+
+	// Stop the cron scheduler to prevent new jobs from starting during shutdown.
+	cronCtx := scheduler.Stop()
 
 	// Close the task channel and wait for workers to finish.
 	close(tasks)
 
 	// Wait for the completion of all workers.
 	wg.Wait()
+
+	// Wait for all currently running cron jobs to finish their execution.
+	<-cronCtx.Done()
 }
 
-// worker processes incoming tasks from the task channel.
-// It evaluates each usecase's Matches method and invokes Handle if matched.
-// Errors from Matches or Handle are forwarded to the task's fallback handler.
+// worker processes tasks received from the task channel. It evaluates each
+// usecase's Matches method and invokes Handle if matched. Errors from Matches
+// or Handle are forwarded to the task's fallback handler.
 func (p *Platform[U]) worker(tasks <-chan Task[U], wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -239,9 +264,10 @@ func (p *Platform[U]) worker(tasks <-chan Task[U], wg *sync.WaitGroup) {
 	}
 }
 
-// cron initializes and starts all registered cron jobs.
-// Each job is wrapped with job middlewares and executed in its own goroutine by the cron scheduler.
-// The job's name and a unique request ID are injected into the context before execution.
+// cron initializes and starts all registered cron jobs. Each job is wrapped
+// with job middlewares and executed in its own goroutine by the cron scheduler.
+// The job's name and a unique request ID are injected into the context before
+// execution.
 func (p *Platform[U]) cron(ctx context.Context) *cron.Cron {
 	x := cron.New(
 		cron.WithLocation(p.location),
@@ -257,7 +283,7 @@ func (p *Platform[U]) cron(ctx context.Context) *cron.Cron {
 		})
 
 		if _, err := x.AddFunc(job.Cron(), func() {
-			ctx := context.WithValue(ctx, RequestID{}, uuid.New().String())
+			ctx := context.WithValue(context.WithoutCancel(ctx), RequestID{}, uuid.New().String())
 			_ = ch(ctx)
 		}); err != nil {
 			panic(err)
@@ -269,8 +295,8 @@ func (p *Platform[U]) cron(ctx context.Context) *cron.Cron {
 	return x
 }
 
-// chainUsecases builds a middleware chain that wraps the endpoint.
-// Middlewares are applied in reverse order (last added executes first).
+// chainUsecases builds a middleware chain that wraps the endpoint. Middlewares
+// are applied in reverse order (last added executes first).
 func chainUsecases[U Update](mw []UsecaseMiddleware[U], endpoint HandlerFunc[U]) HandlerFunc[U] {
 	x := endpoint
 	for i := len(mw) - 1; i >= 0; i-- {
@@ -284,8 +310,8 @@ func chainUsecases[U Update](mw []UsecaseMiddleware[U], endpoint HandlerFunc[U])
 	return x
 }
 
-// chainJobs builds a middleware chain for cron job execution.
-// Middlewares are applied in reverse order (last added executes first).
+// chainJobs builds a middleware chain for cron job execution. Middlewares are
+// applied in reverse order (last added executes first).
 func chainJobs(mw []JobMiddleware, endpoint JobHandlerFunc) JobHandlerFunc {
 	x := endpoint
 	for i := len(mw) - 1; i >= 0; i-- {
